@@ -2,13 +2,17 @@ package com.espe.cursos.services;
 
 import com.espe.cursos.models.Reserva;
 import com.espe.cursos.models.ReservaServicio;
+import com.espe.cursos.models.ServicioDTO;
 import com.espe.cursos.repositories.ReservaRepository;
-import com.espe.cursos.repositories.ReservaServicioRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.client.RestTemplate;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 @Service
 public class ReservaService {
@@ -17,65 +21,129 @@ public class ReservaService {
     private ReservaRepository reservaRepository;
 
     @Autowired
-    private ReservaServicioRepository reservaServicioRepository; // Repositorio para la relación entre reserva y servicio
+    private RestTemplate restTemplate;
 
+    private static final String SERVICIO_API_URL = "http://localhost:8001/api/servicios/";
+
+    @Transactional(readOnly = true)
     public List<Reserva> findAll() {
         return reservaRepository.findAll();
     }
 
+    @Transactional(readOnly = true)
     public Optional<Reserva> findById(Long id) {
         return reservaRepository.findById(id);
     }
 
+    @Transactional
     public Reserva save(Reserva reserva) {
+        if (reserva.getFechaHora().isBefore(LocalDateTime.now())) {
+            throw new IllegalArgumentException("La fecha de reserva no puede ser en el pasado");
+        }
         return reservaRepository.save(reserva);
     }
 
+    @Transactional
     public void deleteById(Long id) {
         reservaRepository.deleteById(id);
     }
 
-    public Reserva crearReserva(Reserva reserva) {
-        // Validar la lógica necesaria antes de guardar
-        return reservaRepository.save(reserva);
-    }
-
-    public void cancelarReserva(Long id) {
-        Optional<Reserva> reservaOptional = reservaRepository.findById(id);
-        if (reservaOptional.isPresent()) {
-            reservaRepository.deleteById(id);
-        } else {
-            throw new IllegalArgumentException("Reserva no encontrada");
-        }
-    }
-
-    // Asigna un servicio a una reserva
-    public Optional<ReservaServicio> asignarServicio(Long reservaId, Long servicioId) {
+    @Transactional
+    public Optional<ReservaServicio> asignarServicioAReserva(Long reservaId, Long servicioId) {
         Optional<Reserva> reservaOptional = reservaRepository.findById(reservaId);
         if (reservaOptional.isPresent()) {
             Reserva reserva = reservaOptional.get();
 
-            // Crear una nueva instancia de ReservaServicio
-            ReservaServicio reservaServicio = new ReservaServicio();
-            reservaServicio.setReservaId(reservaId);
-            reservaServicio.setServicioId(servicioId);
+            // Validar si el servicio ya está asignado a la reserva
+            boolean servicioYaAsignado = reserva.getReservaServicios().stream()
+                    .anyMatch(rs -> rs.getServicioId().equals(servicioId));
+            if (servicioYaAsignado) {
+                throw new IllegalArgumentException("Este servicio ya está asignado a la reserva");
+            }
 
-            // Aquí puedes obtener más información sobre el servicio, como el nombre y la descripción, si lo necesitas
+            try {
+                // Llamada al microservicio de servicios
+                ServicioDTO servicio = restTemplate.getForObject(
+                        SERVICIO_API_URL + servicioId,
+                        ServicioDTO.class
+                );
 
-            // Guardar la relación en la base de datos
-            reservaServicioRepository.save(reservaServicio);
-            return Optional.of(reservaServicio);
+                if (servicio == null) {
+                    throw new IllegalArgumentException("No se encuentra el servicio solicitado");
+                }
+
+                ReservaServicio reservaServicio = new ReservaServicio();
+                reservaServicio.setServicioId(servicio.getId());
+                reservaServicio.setNombreServicio(servicio.getNombre());
+                reservaServicio.setDescripcionServicio(servicio.getDescripcion());
+                reservaServicio.setPrecio(servicio.getPrecio());
+                reservaServicio.setDuracion(servicio.getDuracion());
+                reservaServicio.setCreadoEn(LocalDateTime.now());
+                reservaServicio.setReserva(reserva);
+
+                reserva.getReservaServicios().add(reservaServicio);
+                reservaRepository.save(reserva);
+
+                return Optional.of(reservaServicio);
+            } catch (Exception e) {
+                if (e.getMessage().contains("Connection refused")) {
+                    throw new RuntimeException("Error de conexión con el servicio de servicios");
+                }
+                throw new RuntimeException("Error al asignar servicio: " + e.getMessage());
+            }
         }
-        return Optional.empty();  // Retorna vacío si no se encuentra la reserva
+        return Optional.empty();
     }
 
-    // Elimina la relación entre reserva y servicio
-    public void eliminarServicioDeReserva(Long reservaId, Long servicioId) {
-        Optional<ReservaServicio> reservaServicioOptional = reservaServicioRepository.findByReservaIdAndServicioId(reservaId, servicioId);
-        if (reservaServicioOptional.isPresent()) {
-            reservaServicioRepository.delete(reservaServicioOptional.get());
-        } else {
-            throw new IllegalArgumentException("No se encontró la relación entre la reserva y el servicio");
+    @Transactional
+    public boolean eliminarServicioDeReserva(Long reservaId, Long servicioId) {
+        Optional<Reserva> reservaOptional = reservaRepository.findById(reservaId);
+        if (reservaOptional.isPresent()) {
+            Reserva reserva = reservaOptional.get();
+            boolean eliminado = reserva.getReservaServicios().removeIf(
+                    rs -> rs.getServicioId().equals(servicioId)
+            );
+            if (eliminado) {
+                reservaRepository.save(reserva);
+                return true;
+            }
         }
+        return false;
+    }
+
+    @Transactional(readOnly = true)
+    public List<ReservaServicio> listarServiciosDeReserva(Long reservaId) {
+        Optional<Reserva> reservaOptional = reservaRepository.findById(reservaId);
+        if (reservaOptional.isPresent()) {
+            return reservaOptional.get().getReservaServicios();
+        }
+        throw new IllegalArgumentException("La reserva con ID " + reservaId + " no existe.");
+    }
+
+    @Transactional(readOnly = true)
+    public List<Reserva> listarReservasPorServicio(Long servicioId) {
+        return reservaRepository.findAll().stream()
+                .filter(reserva -> reserva.getReservaServicios().stream()
+                        .anyMatch(servicio -> servicio.getServicioId().equals(servicioId)))
+                .collect(Collectors.toList());
+    }
+
+    // Métodos adicionales que podrían ser útiles
+
+    @Transactional(readOnly = true)
+    public List<Reserva> buscarReservasPorFecha(LocalDateTime fecha) {
+        return reservaRepository.findAll().stream()
+                .filter(reserva -> reserva.getFechaHora().toLocalDate()
+                        .equals(fecha.toLocalDate()))
+                .collect(Collectors.toList());
+    }
+
+    @Transactional(readOnly = true)
+    public List<Reserva> buscarReservasPorCliente(String nombreCliente) {
+        return reservaRepository.findAll().stream()
+                .filter(reserva -> reserva.getNombreCliente()
+                        .toLowerCase()
+                        .contains(nombreCliente.toLowerCase()))
+                .collect(Collectors.toList());
     }
 }
