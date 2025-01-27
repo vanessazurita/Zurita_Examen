@@ -1,0 +1,28 @@
+Reservas
+GET: http://localhost:8002/api/reservas
+POST: http://localhost:8002/api/reservas
+{
+    "nombreCliente": "Vanessa Zurita",
+    "fechaHora": "2025-02-15T14:30:00",
+    "numeroPersonas": 4,
+    "comentarios": "Mesa junto a la ventana"
+}
+PUT: http://localhost:8002/api/reservas/{id}
+DELETE: http://localhost:8002/api/reservas/{id} 
+
+Servicios
+GET: http://localhost:8001/api/servicios
+POST: http://localhost:8001/api/servicios
+{
+    "nombre": "Espejismo",
+    "descripcion": "Decoración temática para eventos",
+    "precio": 50.00,
+    "duracion": "2 horas"
+}
+PUT: http://localhost:8001/api/servicios/{id}
+DELETE: http://localhost:8001/api/servicios/{id} 
+
+
+http://localhost:8002/api/reservas/asignar-servicio/3
+http://localhost:8002/api/reservas/servicio/2/reservas
+http://localhost:8002/api/reservas/eliminar-servicio/1/servicio/2
